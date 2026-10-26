@@ -1,6 +1,6 @@
 """Command Line Interface for Plexo.
 
-Exposes subcommands: download, adapters, proxy, info.
+Exposes subcommands: download, adapters, proxy, torrent, watch, info.
 """
 
 from __future__ import annotations
@@ -76,22 +76,29 @@ def list_adapters(show_all: bool):
 
 @main.command(name="download")
 @click.argument("url")
+@click.option("-m", "--mirror", "mirrors", multiple=True, help="Alternative mirror URL(s) for the same file.")
 @click.option("-o", "--output", "output_path", type=click.Path(), default=None, help="Output destination path.")
 @click.option("--chunk-size", default=8, type=int, help="Chunk size in MB (default: 8 MB).")
 @click.option("--workers", default=2, type=int, help="Workers per network adapter (default: 2).")
 @click.option("-H", "--header", "headers_list", multiple=True, help="Custom HTTP header (e.g. -H 'Auth: token').")
 @click.option("--cookie", default=None, help="Custom Cookie header for protected sites/filelockers.")
 @click.option("--referer", default=None, help="Custom Referer URL for sites requiring origin verification.")
+@click.option("--sequential", is_flag=True, help="Download in sequential order (watch media while downloading).")
+@click.option("-q", "--quota", "quota_list", multiple=True, help="Data cap for adapter (e.g. -q usb=1.5GB).")
 def download_file(
     url: str,
+    mirrors: tuple[str, ...],
     output_path: Optional[str],
     chunk_size: int,
     workers: int,
     headers_list: tuple[str, ...],
     cookie: Optional[str],
     referer: Optional[str],
+    sequential: bool,
+    quota_list: tuple[str, ...],
 ):
-    """Download a file using bonded multi-network connections."""
+    """Download a file using bonded multi-network connections and mirrors."""
+    from .core.qos import parse_size_str
     adapters = get_bonded_pool()
     if not adapters:
         console.print("[bold red]Error: No active online network adapters detected.[/bold red]")
@@ -103,6 +110,21 @@ def download_file(
         if ":" in h:
             k, v = h.split(":", 1)
             parsed_headers[k.strip()] = v.strip()
+
+    # Parse adapter data quotas
+    parsed_quotas = {}
+    for q in quota_list:
+        if "=" in q:
+            ident, s_val = q.split("=", 1)
+            parsed_quotas[ident.strip()] = parse_size_str(s_val.strip())
+
+    # Parse alternative mirror URLs
+    parsed_mirrors = []
+    for m in mirrors:
+        for sub_m in m.split(","):
+            sub_m = sub_m.strip()
+            if sub_m and sub_m not in parsed_mirrors and sub_m != url:
+                parsed_mirrors.append(sub_m)
 
     dashboard = TerminalDashboard(console=console)
     chunk_bytes = chunk_size * 1024 * 1024
@@ -116,10 +138,13 @@ def download_file(
         custom_headers=parsed_headers,
         cookie=cookie,
         referer=referer,
+        sequential=sequential,
+        quotas=parsed_quotas,
+        mirrors=parsed_mirrors,
     )
 
     probe = engine._prepare()
-    dashboard.setup(probe.filename, probe.total_bytes, adapters)
+    dashboard.setup(probe.filename, probe.total_bytes, adapters, mirrors=engine.mirrors)
 
     start_time = time.time()
     with dashboard.progress:
@@ -133,7 +158,7 @@ def download_file(
     with SparseFileWriter(final_path, total_bytes) as writer:
         checksum = writer.calculate_checksum()
 
-    dashboard.finish(final_path.name, total_bytes, elapsed, checksum)
+    dashboard.finish(final_path.name, total_bytes, elapsed, checksum, mirrors=engine.mirrors)
 
 
 @main.command(name="proxy")
@@ -147,26 +172,64 @@ def start_proxy(host: str, port: int):
 @main.command(name="torrent")
 @click.argument("source")
 @click.option("-o", "--output-dir", default=".", help="Directory to save downloaded files.")
-def download_torrent(source: str, output_dir: str):
+@click.option("--sequential", is_flag=True, help="Download pieces in sequential order (watch media while downloading).")
+@click.option("--list", "list_files", is_flag=True, help="List all files in the torrent and exit.")
+@click.option("--select", "select_files", default=None, help="Download only specific file numbers (e.g. --select 1,2).")
+@click.option("-q", "--quota", "quota_list", multiple=True, help="Data cap for adapter (e.g. -q usb=1.5GB).")
+def download_torrent(
+    source: str,
+    output_dir: str,
+    sequential: bool,
+    list_files: bool,
+    select_files: Optional[str],
+    quota_list: tuple[str, ...],
+):
     """Download a torrent or magnet link across bonded network adapters."""
+    from .core.qos import parse_size_str
     from .torrent.metadata import parse_magnet, parse_torrent_file
     from .torrent.client import TorrentBondingEngine
-
-    adapters = get_bonded_pool()
-    if not adapters:
-        console.print("[bold red]Error: No active online network adapters detected.[/bold red]")
-        raise click.Abort()
 
     if source.startswith("magnet:?"):
         meta = parse_magnet(source)
     else:
         meta = parse_torrent_file(source)
 
+    if list_files:
+        table = Table(title=f"[bold green]Torrent Contents: {meta.name}[/bold green]")
+        table.add_column("#", style="bold yellow", justify="right")
+        table.add_column("File Name / Path", style="cyan")
+        table.add_column("Size", style="magenta", justify="right")
+        for f in meta.files:
+            size_str = f"{f.size_mb:.2f} MB" if f.size_mb < 1024 else f"{f.size_gb:.2f} GB"
+            table.add_row(str(f.index), f.path, size_str)
+        console.print(table)
+        console.print(
+            "\n[dim]To download specific files, run:[/dim]\n"
+            f"  plexo torrent \"{source}\" --select 1,2 -o \"{output_dir}\"\n"
+        )
+        return
+
+    adapters = get_bonded_pool()
+    if not adapters:
+        console.print("[bold red]Error: No active online network adapters detected.[/bold red]")
+        raise click.Abort()
+
+    selected_indices = None
+    if select_files:
+        selected_indices = [int(s.strip()) for s in select_files.split(",") if s.strip().isdigit()]
+
+    parsed_quotas = {}
+    for q in quota_list:
+        if "=" in q:
+            ident, s_val = q.split("=", 1)
+            parsed_quotas[ident.strip()] = parse_size_str(s_val.strip())
+
     console.print(
         Panel.fit(
             f"[bold cyan]Plexo Torrent Swarm Engine[/bold cyan]\n"
             f"Name: [bold yellow]{meta.name}[/bold yellow]\n"
             f"Info Hash: [dim]{meta.info_hash_hex}[/dim]\n"
+            f"Selected Files: [green]{len(selected_indices) if selected_indices else 'All'}[/green] / {len(meta.files)}\n"
             f"Active Network Links: [bold green]{len(adapters)}[/bold green]",
             border_style="cyan",
         )
@@ -175,7 +238,14 @@ def download_torrent(source: str, output_dir: str):
     dashboard = TerminalDashboard(console=console)
     dashboard.setup(meta.name, meta.total_length, adapters)
 
-    engine = TorrentBondingEngine(metadata=meta, output_dir=output_dir, adapters=adapters)
+    engine = TorrentBondingEngine(
+        metadata=meta,
+        output_dir=output_dir,
+        adapters=adapters,
+        sequential=sequential,
+        selected_files=selected_indices,
+        quotas=parsed_quotas,
+    )
 
     start_time = time.time()
     with dashboard.progress:
@@ -189,6 +259,22 @@ def download_torrent(source: str, output_dir: str):
         checksum = writer.calculate_checksum()
 
     dashboard.finish(final_path.name, total_bytes, elapsed, checksum)
+
+
+@main.command(name="watch")
+@click.option("--auto-download", "-y", is_flag=True, help="Automatically download detected links without prompting.")
+@click.option("-o", "--output-dir", default=None, help="Directory to save downloaded files.")
+@click.option("-i", "--poll-interval", default=1.0, type=float, help="Clipboard polling interval in seconds (default: 1.0).")
+def watch_clipboard(auto_download: bool, output_dir: Optional[str], poll_interval: float):
+    """Monitor clipboard for download URLs and magnet links."""
+    from .ui.watcher import ClipboardWatcher
+    watcher = ClipboardWatcher(
+        poll_interval=poll_interval,
+        auto_download=auto_download,
+        output_dir=output_dir,
+        console=console,
+    )
+    watcher.run()
 
 
 @main.command(name="info")

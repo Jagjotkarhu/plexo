@@ -53,7 +53,7 @@ def probe_url(
     """Probes the remote server to determine file size, range support, filename, and session cookies."""
     http = urllib3.PoolManager()
     headers = {
-        "User-Agent": "Plexo-CLI/0.1.1 (Bandwidth-Bonding-Engine)",
+        "User-Agent": "Plexo-CLI/0.1.2 (Bandwidth-Bonding-Engine)",
         "Accept-Encoding": "identity",
     }
     if custom_headers:
@@ -71,6 +71,9 @@ def probe_url(
     except Exception:
         headers["Range"] = "bytes=0-0"
         resp = http.request("GET", url, headers=headers, timeout=timeout, redirect=True)
+
+    if resp.status >= 400:
+        raise IOError(f"Remote server responded with error status {resp.status} for URL: {url}")
 
     final_url = url
     if hasattr(resp, "url") and resp.url:
@@ -127,6 +130,65 @@ def probe_url(
     )
 
 
+def probe_mirrors(
+    urls: list[str],
+    timeout: float = 10.0,
+    custom_headers: Optional[Dict[str, str]] = None,
+    cookie: Optional[str] = None,
+    referer: Optional[str] = None,
+) -> tuple[ProbeResult, list[str]]:
+    """Probes candidate URLs (primary and mirrors), establishing metadata and valid mirror endpoints."""
+    if not urls:
+        raise ValueError("At least one URL must be provided.")
+
+    primary_probe: Optional[ProbeResult] = None
+    last_err: Optional[Exception] = None
+
+    for candidate in urls:
+        try:
+            primary_probe = probe_url(
+                candidate,
+                timeout=timeout,
+                custom_headers=custom_headers,
+                cookie=cookie,
+                referer=referer,
+            )
+            break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if primary_probe is None:
+        raise RuntimeError(f"Failed to probe any of the provided URLs ({urls}): {last_err}")
+
+    verified_urls = [primary_probe.url]
+    for mirror in urls:
+        if mirror == primary_probe.url or mirror in verified_urls:
+            continue
+        try:
+            m_probe = probe_url(
+                mirror,
+                timeout=timeout,
+                custom_headers=custom_headers,
+                cookie=cookie,
+                referer=referer,
+            )
+            # If primary probe accepts ranges, mirror must also accept ranges
+            if primary_probe.accepts_ranges and not m_probe.accepts_ranges:
+                continue
+
+            if primary_probe.total_bytes > 0:
+                if m_probe.total_bytes == primary_probe.total_bytes:
+                    verified_urls.append(mirror)
+            elif m_probe.total_bytes == 0:
+                verified_urls.append(mirror)
+        except Exception:
+            # Ignore unresponsive mirror during probe; engine will retry or exclude
+            pass
+
+    return primary_probe, verified_urls
+
+
 class BoundRangeClient:
     """Performs HTTP GET range downloads strictly bound to a local adapter IP."""
 
@@ -160,7 +222,7 @@ class BoundRangeClient:
     ) -> Generator[bytes, None, None]:
         """Fetches [start_byte, end_byte] inclusive through the bound adapter."""
         headers = {
-            "User-Agent": "Plexo-CLI/0.1.1 (Bandwidth-Bonding-Engine)",
+            "User-Agent": "Plexo-CLI/0.1.2 (Bandwidth-Bonding-Engine)",
             "Range": f"bytes={start_byte}-{end_byte}",
             "Accept-Encoding": "identity",
         }
@@ -175,12 +237,68 @@ class BoundRangeClient:
         resp = self._pool.request("GET", url, headers=headers, preload_content=False)
         try:
             if resp.status not in (200, 206):
-                raise IOError(f"HTTP Range request failed with status {resp.status}")
+                raise IOError(f"HTTP Range request failed with status {resp.status} from {url}")
+            if resp.status == 200 and start_byte > 0:
+                raise IOError(
+                    f"Server returned HTTP 200 instead of 206 Partial Content for range {start_byte}-{end_byte}"
+                )
+
+            expected_total = (end_byte - start_byte + 1) if end_byte >= start_byte else None
+            bytes_streamed = 0
 
             for data in resp.stream(chunk_size):
                 if data:
+                    if expected_total is not None and bytes_streamed + len(data) > expected_total:
+                        allowed = expected_total - bytes_streamed
+                        if allowed <= 0:
+                            break
+                        data = data[:allowed]
+
+                    bytes_streamed += len(data)
                     if on_bytes:
                         on_bytes(len(data))
                     yield data
+
+                    if expected_total is not None and bytes_streamed >= expected_total:
+                        break
         finally:
             resp.release_conn()
+
+    def fetch_range_from_mirrors(
+        self,
+        mirrors: list[str],
+        start_byte: int,
+        end_byte: int,
+        preferred_index: int = 0,
+        chunk_size: int = 64 * 1024,
+        on_bytes: Optional[Callable[[int], None]] = None,
+    ) -> Generator[bytes, None, None]:
+        """Fetches range attempting preferred mirror first, then rotating to others on failure."""
+        if not mirrors:
+            raise ValueError("No mirror URLs provided")
+
+        num_mirrors = len(mirrors)
+        last_error = None
+        current_start = start_byte
+
+        for attempt in range(num_mirrors):
+            if current_start > end_byte:
+                return
+            current_idx = (preferred_index + attempt) % num_mirrors
+            current_url = mirrors[current_idx]
+            try:
+                for block in self.fetch_range(
+                    url=current_url,
+                    start_byte=current_start,
+                    end_byte=end_byte,
+                    chunk_size=chunk_size,
+                    on_bytes=on_bytes,
+                ):
+                    current_start += len(block)
+                    yield block
+                return
+            except Exception as e:
+                last_error = e
+                continue
+
+        raise IOError(f"All mirrors failed for range {start_byte}-{end_byte}: {last_error}")

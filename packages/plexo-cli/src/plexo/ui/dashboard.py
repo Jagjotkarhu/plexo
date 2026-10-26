@@ -41,13 +41,20 @@ class TerminalDashboard:
         self.overall_task: Optional[TaskID] = None
         self.adapter_tasks: Dict[str, TaskID] = {}
 
-    def setup(self, filename: str, total_bytes: int, adapters: List[NetworkAdapter]) -> None:
+    def setup(
+        self,
+        filename: str,
+        total_bytes: int,
+        adapters: List[NetworkAdapter],
+        mirrors: Optional[List[str]] = None,
+    ) -> None:
         """Initializes the multi-bar display."""
+        mirror_info = f"\nActive Mirrors: [bold green]{len(mirrors)}[/bold green]" if mirrors and len(mirrors) > 1 else ""
         self.console.print(
             Panel.fit(
                 f"[bold cyan]Plexo Multi-Network Bonding Engine[/bold cyan]\n"
                 f"File: [bold yellow]{filename}[/bold yellow] ({total_bytes / (1024*1024):.1f} MB)\n"
-                f"Active Bonded Links: [bold green]{len(adapters)}[/bold green]",
+                f"Active Bonded Links: [bold green]{len(adapters)}[/bold green]{mirror_info}",
                 border_style="cyan",
             )
         )
@@ -80,7 +87,14 @@ class TerminalDashboard:
                 # Update task with simulated progress proportional to transferred bytes
                 self.progress.update(task_id)
 
-    def finish(self, filename: str, total_bytes: int, elapsed_seconds: float, checksum: str) -> None:
+    def finish(
+        self,
+        filename: str,
+        total_bytes: int,
+        elapsed_seconds: float,
+        checksum: str,
+        mirrors: Optional[List[str]] = None,
+    ) -> None:
         """Displays completion summary table."""
         avg_speed_mb = (total_bytes / (1024 * 1024)) / max(0.1, elapsed_seconds)
 
@@ -92,6 +106,8 @@ class TerminalDashboard:
         table.add_row("Total Size", f"{total_bytes / (1024*1024):.2f} MB ({total_bytes:,} bytes)")
         table.add_row("Time Taken", f"{elapsed_seconds:.2f} s")
         table.add_row("Aggregated Speed", f"[bold green]{avg_speed_mb:.2f} MB/s[/bold green]")
+        if mirrors and len(mirrors) > 1:
+            table.add_row("Mirrors Utilized", f"[bold green]{len(mirrors)}[/bold green]")
         table.add_row("SHA-256", f"[dim]{checksum}[/dim]")
 
         self.console.print()

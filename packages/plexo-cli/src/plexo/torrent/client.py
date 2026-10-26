@@ -35,12 +35,20 @@ class TorrentBondingEngine:
         output_dir: str | Path,
         adapters: Optional[List[NetworkAdapter]] = None,
         peer_id: Optional[bytes] = None,
+        sequential: bool = False,
+        selected_files: Optional[List[int]] = None,
+        quotas: Optional[dict[str, int]] = None,
     ):
         self.metadata = metadata
         self.output_dir = Path(output_dir).resolve()
         self.adapters = adapters or get_bonded_pool()
         self.peer_id = peer_id or (b"-PX0010-" + hashlib.sha1(str(time.time()).encode()).digest()[:12])
+        self.sequential = sequential
+        self.selected_files = selected_files
+        self.quotas = quotas or {}
         self.watchdog = QoSWatchdog()
+        for ident, q_bytes in self.quotas.items():
+            self.watchdog.set_quota(ident, q_bytes)
 
         self._target_path = self.output_dir / self.metadata.name
         self._completed_pieces = 0
@@ -68,9 +76,21 @@ class TorrentBondingEngine:
         for a in self.adapters:
             self.watchdog.register(a.name, a.ip_address, a.kind)
 
-        # Queue pieces
+        # Queue pieces (Supports selective file download & sequential priority)
         piece_queue: queue.Queue[int] = queue.Queue()
-        for idx in range(len(self.metadata.pieces)):
+        piece_indices = self.metadata.get_piece_range_for_files(self.selected_files or [])
+        if self.sequential and len(piece_indices) > 2:
+            piece_order = [piece_indices[0], piece_indices[-1]] + piece_indices[1:-1]
+        else:
+            piece_order = piece_indices
+
+        target_bytes = (
+            sum(f.length for f in self.metadata.files if f.index in self.selected_files)
+            if self.selected_files
+            else total_bytes
+        )
+
+        for idx in piece_order:
             piece_queue.put(idx)
 
         # Pre-allocate target sparse file
@@ -124,6 +144,10 @@ class TorrentBondingEngine:
         piece_len = self.metadata.piece_length
 
         while not self._cancel_event.is_set():
+            if not self.watchdog.can_accept_chunk(adapter.ip_address):
+                # Quota reached for this connection
+                break
+
             try:
                 piece_idx = piece_queue.get_nowait()
             except queue.Empty:

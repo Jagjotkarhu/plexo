@@ -93,3 +93,49 @@ def test_torrent_bonding_engine_download():
             content = f.read()
 
         assert content == p1 + p2
+
+
+def test_torrent_multi_file_selection():
+    from plexo.torrent.metadata import TorrentFileEntry
+    with tempfile.TemporaryDirectory() as tmpdir:
+        piece_size = 1024
+        p1 = b"T" * piece_size
+        p2 = b"T" * piece_size
+
+        h1 = hashlib.sha1(p1).digest()
+        h2 = hashlib.sha1(p2).digest()
+
+        f1 = TorrentFileEntry(index=1, path="Season 1/Ep1.mkv", length=piece_size, offset_start=0, offset_end=piece_size - 1)
+        f2 = TorrentFileEntry(index=2, path="Season 1/Ep2.mkv", length=piece_size, offset_start=piece_size, offset_end=piece_size * 2 - 1)
+
+        meta = TorrentMetadata(
+            name="Series.S01",
+            info_hash=hashlib.sha1(b"info_mock").digest(),
+            total_length=piece_size * 2,
+            piece_length=piece_size,
+            pieces=[h1, h2],
+            trackers=["http://mock.tracker/announce"],
+            files=[f1, f2],
+        )
+
+        required_pieces = meta.get_piece_range_for_files([2])
+        assert required_pieces == [1]
+
+        mock_nic = NetworkAdapter(
+            name="Hostel-WiFi",
+            ip_address="192.168.1.50",
+            netmask="255.255.255.0",
+            kind="wifi",
+            is_up=True,
+            is_online=True,
+        )
+
+        engine = TorrentBondingEngine(
+            metadata=meta,
+            output_dir=tmpdir,
+            adapters=[mock_nic],
+            selected_files=[2],
+        )
+
+        final_path = engine.download()
+        assert final_path.exists()

@@ -119,3 +119,121 @@ def test_bonded_engine_with_cookies_and_referer(mock_server):
         final_path = engine.execute()
         assert final_path.exists()
         assert final_path.stat().st_size == len(RangeHTTPRequestHandler.DATA)
+
+
+def test_bonded_engine_resume(mock_server):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "resume_test.bin"
+        state_file = output_file.with_name(output_file.name + ".plexo")
+        total_len = len(RangeHTTPRequestHandler.DATA)
+        chunk_size = 128 * 1024
+
+        # Simulate that chunk 0 was already downloaded
+        chunk_0_data = RangeHTTPRequestHandler.DATA[:chunk_size]
+        with open(output_file, "wb") as f:
+            f.seek(total_len - 1)
+            f.write(b"\0")
+        with open(output_file, "r+b") as f:
+            f.seek(0)
+            f.write(chunk_0_data)
+
+        import json
+        with open(state_file, "w") as sf:
+            json.dump({"total_bytes": total_len, "completed_chunks": [0]}, sf)
+
+        mock_adapter = NetworkAdapter(
+            name="Mock-Adapter",
+            ip_address="127.0.0.1",
+            netmask="255.255.255.0",
+            kind="ethernet",
+            is_up=True,
+            is_online=True,
+        )
+
+        engine = BondingDownloadEngine(
+            url=mock_server,
+            output_path=output_file,
+            adapters=[mock_adapter],
+            chunk_size=chunk_size,
+        )
+
+        final_path = engine.execute()
+        assert final_path.exists()
+        assert not state_file.exists()  # Cleaned up after 100% completion
+
+        # Verify byte-for-byte SHA256 matches full original data
+        expected_hash = hashlib.sha256(RangeHTTPRequestHandler.DATA).hexdigest()
+        with open(final_path, "rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == expected_hash
+
+
+def test_bonded_engine_adapter_quota(mock_server):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "quota_test.bin"
+        chunk_size = 128 * 1024
+
+        mock_nic_1 = NetworkAdapter(
+            name="Capped-Cellular-USB",
+            ip_address="127.0.0.1",
+            netmask="255.255.255.0",
+            kind="usb",
+            is_up=True,
+            is_online=True,
+        )
+        mock_nic_2 = NetworkAdapter(
+            name="Unlimited-WiFi",
+            ip_address="127.0.0.2",
+            netmask="255.255.255.0",
+            kind="wifi",
+            is_up=True,
+            is_online=True,
+        )
+
+        engine = BondingDownloadEngine(
+            url=mock_server,
+            output_path=output_file,
+            adapters=[mock_nic_1, mock_nic_2],
+            chunk_size=chunk_size,
+            quotas={"usb": 131072},  # Cap USB to exactly 1 chunk (128 KB)
+        )
+
+        final_path = engine.execute()
+        assert final_path.exists()
+        assert final_path.stat().st_size == len(RangeHTTPRequestHandler.DATA)
+
+        # Confirm USB did not exceed its quota
+        usb_metrics = engine.watchdog.get(mock_nic_1.ip_address)
+        assert usb_metrics.is_exhausted is True or usb_metrics.bytes_transferred <= 262144
+
+        expected_hash = hashlib.sha256(RangeHTTPRequestHandler.DATA).hexdigest()
+        with open(final_path, "rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == expected_hash
+
+
+def test_bonded_engine_sequential_order(mock_server):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "sequential_test.bin"
+        mock_adapter = NetworkAdapter(
+            name="Mock-Adapter",
+            ip_address="127.0.0.1",
+            netmask="255.255.255.0",
+            kind="ethernet",
+            is_up=True,
+            is_online=True,
+        )
+
+        engine = BondingDownloadEngine(
+            url=mock_server,
+            output_path=output_file,
+            adapters=[mock_adapter],
+            chunk_size=128 * 1024,
+            sequential=True,
+        )
+
+        final_path = engine.execute()
+        assert final_path.exists()
+        assert final_path.stat().st_size == len(RangeHTTPRequestHandler.DATA)
+
+        expected_hash = hashlib.sha256(RangeHTTPRequestHandler.DATA).hexdigest()
+        with open(final_path, "rb") as f:
+            assert hashlib.sha256(f.read()).hexdigest() == expected_hash

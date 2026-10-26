@@ -12,6 +12,24 @@ from .bencode import bdecode, bencode
 
 
 @dataclass
+class TorrentFileEntry:
+    """Represents an individual file within a multi-file or single-file torrent."""
+    index: int  # 1-based index (e.g. 1, 2, 3...)
+    path: str
+    length: int
+    offset_start: int
+    offset_end: int
+
+    @property
+    def size_mb(self) -> float:
+        return self.length / (1024 * 1024)
+
+    @property
+    def size_gb(self) -> float:
+        return self.length / (1024 * 1024 * 1024)
+
+
+@dataclass
 class TorrentMetadata:
     """Represents resolved BitTorrent swarm metadata."""
     name: str
@@ -20,6 +38,7 @@ class TorrentMetadata:
     piece_length: int
     pieces: List[bytes] = field(default_factory=list)
     trackers: List[str] = field(default_factory=list)
+    files: List[TorrentFileEntry] = field(default_factory=list)
 
     @property
     def info_hash_hex(self) -> str:
@@ -28,6 +47,24 @@ class TorrentMetadata:
     @property
     def num_pieces(self) -> int:
         return len(self.pieces) if self.pieces else 0
+
+    def get_piece_range_for_files(self, selected_indices: List[int]) -> List[int]:
+        """Returns the piece indices required to download only the selected file indices."""
+        if not selected_indices:
+            return list(range(self.num_pieces))
+
+        if self.piece_length <= 0:
+            return list(range(self.num_pieces))
+
+        required = set()
+        for f in self.files:
+            if f.index in selected_indices:
+                p_start = f.offset_start // self.piece_length
+                p_end = f.offset_end // self.piece_length
+                for p in range(p_start, min(p_end + 1, self.num_pieces)):
+                    required.add(p)
+
+        return sorted(list(required))
 
 
 def parse_magnet(uri: str) -> TorrentMetadata:
@@ -48,7 +85,6 @@ def parse_magnet(uri: str) -> TorrentMetadata:
     if not btih:
         raise ValueError("Magnet URI missing required 'urn:btih:' info hash.")
 
-    # Format can be 40-character hex or 32-character Base32
     if len(btih) == 40:
         info_hash = bytes.fromhex(btih)
     elif len(btih) == 32:
@@ -56,24 +92,22 @@ def parse_magnet(uri: str) -> TorrentMetadata:
     else:
         raise ValueError(f"Invalid BTIH length: {len(btih)}")
 
-    # Extract display name (dn)
     dn = params.get("dn", ["torrent_download"])[0]
     name = unquote(dn)
-
-    # Extract trackers (tr)
     trackers = [unquote(tr) for tr in params.get("tr", [])]
 
     return TorrentMetadata(
         name=name,
         info_hash=info_hash,
-        total_length=0,  # Resolved from swarm peers
+        total_length=0,
         piece_length=0,
         trackers=trackers,
+        files=[TorrentFileEntry(index=1, path=name, length=0, offset_start=0, offset_end=0)],
     )
 
 
 def parse_torrent_file(path: str | Path) -> TorrentMetadata:
-    """Parses a .torrent file from disk."""
+    """Parses a .torrent file from disk with full multi-file manifest."""
     with open(path, "rb") as f:
         data = f.read()
 
@@ -86,19 +120,41 @@ def parse_torrent_file(path: str | Path) -> TorrentMetadata:
     name = info.get("name", b"download").decode("utf-8", errors="replace")
     piece_length = info.get("piece length", 0)
     raw_pieces = info.get("pieces", b"")
-
-    # Split pieces into 20-byte SHA-1 digests
     pieces = [raw_pieces[i : i + 20] for i in range(0, len(raw_pieces), 20)]
 
-    # Compute total size
-    total_length = 0
-    if "length" in info:
-        total_length = info["length"]
-    elif "files" in info:
-        for f in info["files"]:
-            total_length += f.get("length", 0)
+    files: List[TorrentFileEntry] = []
+    current_offset = 0
 
-    # Collect trackers
+    if "files" in info:
+        # Multi-file torrent (e.g. TV season packs, game folders)
+        for idx, f in enumerate(info["files"], start=1):
+            flen = f.get("length", 0)
+            path_parts = [p.decode("utf-8", errors="replace") for p in f.get("path", [])]
+            rel_path = "/".join(path_parts) if path_parts else f"file_{idx}"
+            files.append(
+                TorrentFileEntry(
+                    index=idx,
+                    path=rel_path,
+                    length=flen,
+                    offset_start=current_offset,
+                    offset_end=current_offset + flen - 1 if flen > 0 else current_offset,
+                )
+            )
+            current_offset += flen
+        total_length = current_offset
+    else:
+        # Single-file torrent
+        total_length = info.get("length", 0)
+        files.append(
+            TorrentFileEntry(
+                index=1,
+                path=name,
+                length=total_length,
+                offset_start=0,
+                offset_end=total_length - 1 if total_length > 0 else 0,
+            )
+        )
+
     trackers = []
     if "announce" in meta:
         trackers.append(meta["announce"].decode("ascii", errors="ignore"))
@@ -113,5 +169,6 @@ def parse_torrent_file(path: str | Path) -> TorrentMetadata:
         total_length=total_length,
         piece_length=piece_length,
         pieces=pieces,
-        trackers=list(dict.fromkeys(trackers)),  # Deduplicate
+        trackers=list(dict.fromkeys(trackers)),
+        files=files,
     )

@@ -28,12 +28,21 @@ class SparseFileWriter:
         self._allocate()
 
     def _allocate(self) -> None:
-        """Pre-allocates the file size on disk."""
-        with open(self.target_path, "wb") as f:
-            if self.total_bytes > 0:
-                f.seek(self.total_bytes - 1)
-                f.write(b"\0")
-            f.flush()
+        """Pre-allocates the file size on disk or preserves existing if size matches."""
+        needs_allocate = True
+        if self.target_path.exists():
+            try:
+                if self.target_path.stat().st_size == self.total_bytes:
+                    needs_allocate = False
+            except OSError:
+                pass
+
+        if needs_allocate:
+            with open(self.target_path, "wb") as f:
+                if self.total_bytes > 0:
+                    f.seek(self.total_bytes - 1)
+                    f.write(b"\0")
+                f.flush()
 
         # Open in r+b mode for concurrent random-access writes
         self._file = open(self.target_path, "r+b")
