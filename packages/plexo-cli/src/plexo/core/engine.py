@@ -37,6 +37,7 @@ class ProgressUpdate:
     is_completed: bool = False
     filename: str = ""
     mirror_speeds: dict[str, float] = field(default_factory=dict)
+    adapter_bytes: dict[str, int] = field(default_factory=dict)
 
 
 class BondingDownloadEngine:
@@ -186,6 +187,7 @@ class BondingDownloadEngine:
                                     is_completed=False,
                                     filename=target_path.name,
                                     mirror_speeds=m_speeds,
+                                    adapter_bytes={local_ip: downloaded},
                                 )
                             )
                 last_err = None
@@ -209,6 +211,7 @@ class BondingDownloadEngine:
                     is_completed=True,
                     filename=target_path.name,
                     mirror_speeds=m_speeds,
+                    adapter_bytes={a.ip_address: (self.watchdog.get(a.ip_address).bytes_transferred if self.watchdog.get(a.ip_address) else 0) for a in self.adapters},
                 )
             )
 
@@ -339,6 +342,7 @@ class BondingDownloadEngine:
                     is_completed=True,
                     filename=target_path.name,
                     mirror_speeds=m_speeds,
+                    adapter_bytes={a.ip_address: (self.watchdog.get(a.ip_address).bytes_transferred if self.watchdog.get(a.ip_address) else 0) for a in self.adapters},
                 )
             )
 
@@ -418,6 +422,10 @@ class BondingDownloadEngine:
                             m: self.mirror_bytes.get(m, 0) / elapsed
                             for m in self.mirrors
                         }
+                        bytes_transferred = {
+                            a.ip_address: self.watchdog.get(a.ip_address).bytes_transferred
+                            for a in self.adapters
+                        }
                         progress_callback(
                             ProgressUpdate(
                                 total_bytes=self.probe.total_bytes,
@@ -427,6 +435,7 @@ class BondingDownloadEngine:
                                 is_completed=False,
                                 filename=self.output_path.name if self.output_path else "",
                                 mirror_speeds=m_speeds,
+                                adapter_bytes=bytes_transferred,
                             )
                         )
 

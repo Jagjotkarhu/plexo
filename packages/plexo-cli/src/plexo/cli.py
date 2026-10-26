@@ -155,8 +155,9 @@ def download_file(
 
     # Calculate checksum
     from .core.sparse import SparseFileWriter
-    with SparseFileWriter(final_path, total_bytes) as writer:
-        checksum = writer.calculate_checksum()
+    with console.status("[cyan]Verifying file checksum (SHA-256)...[/cyan]"):
+        with SparseFileWriter(final_path, total_bytes) as writer:
+            checksum = writer.calculate_checksum()
 
     dashboard.finish(final_path.name, total_bytes, elapsed, checksum, mirrors=engine.mirrors)
 

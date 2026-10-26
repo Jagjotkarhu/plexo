@@ -81,11 +81,15 @@ class TerminalDashboard:
                 total=update.total_bytes,
             )
 
+        adapter_bytes = getattr(update, "adapter_bytes", {})
         for ip, speed in update.adapter_speeds.items():
             task_id = self.adapter_tasks.get(ip)
             if task_id is not None:
-                # Update task with simulated progress proportional to transferred bytes
-                self.progress.update(task_id)
+                transferred = adapter_bytes.get(ip)
+                if transferred is not None:
+                    self.progress.update(task_id, completed=transferred)
+                else:
+                    self.progress.update(task_id)
 
     def finish(
         self,

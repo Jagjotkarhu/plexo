@@ -195,5 +195,26 @@ tests/test_mirror.py      PASSED (9/9)
 
 ---
 
+## 🔧 Troubleshooting & Known Issues
+
+### 1. `plexo` is not recognized as a command
+* **Cause:** On Windows (especially Microsoft Store Python editions), user CLI binaries are installed into a sandboxed `Scripts` directory not included in `$env:PATH`.
+* **Fix:** Invoke the module directly via Python:
+  ```bash
+  python -m plexo download "<url>"
+  ```
+  Or add your user scripts directory (`python -c "import sysconfig; print(sysconfig.get_path('scripts'))"`) to your Windows environment `PATH`.
+
+### 2. Multi-adapter progress bars stuck at `0.0%`
+* **Resolved in v0.1.2:** Earlier UI loops updated task speeds without setting `completed=transferred_bytes`, leaving sub-interface progress bars visually locked at `0.0%` even while multi-network bonding was downloading at full wire speed. This is now fixed with real-time per-adapter byte accounting.
+
+### 3. Download appears paused right at 100%
+* **Resolved in v0.1.2:** After downloading multi-hundred MB or GB files, the sparse file writer computes a full SHA-256 integrity checksum. A live console status spinner (`Verifying file checksum (SHA-256)...`) now clearly indicates verification in progress.
+
+### 4. Cloudflare Worker / CDN links dropping
+* **Architecture Note:** URLs proxied through serverless edge workers (e.g. `*.workers.dev`) or filelockers may cap parallel sub-requests or disallow concurrent multi-IP HTTP `Range` slices. If a remote host rejects range slices, Plexo automatically falls back to single-stream mode on the primary connection.
+
+---
+
 ## 📄 License
 MIT © Anmol Kapil & Jagjot Singh
