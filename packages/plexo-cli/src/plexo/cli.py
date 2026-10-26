@@ -79,12 +79,30 @@ def list_adapters(show_all: bool):
 @click.option("-o", "--output", "output_path", type=click.Path(), default=None, help="Output destination path.")
 @click.option("--chunk-size", default=8, type=int, help="Chunk size in MB (default: 8 MB).")
 @click.option("--workers", default=2, type=int, help="Workers per network adapter (default: 2).")
-def download_file(url: str, output_path: Optional[str], chunk_size: int, workers: int):
+@click.option("-H", "--header", "headers_list", multiple=True, help="Custom HTTP header (e.g. -H 'Auth: token').")
+@click.option("--cookie", default=None, help="Custom Cookie header for protected sites/filelockers.")
+@click.option("--referer", default=None, help="Custom Referer URL for sites requiring origin verification.")
+def download_file(
+    url: str,
+    output_path: Optional[str],
+    chunk_size: int,
+    workers: int,
+    headers_list: tuple[str, ...],
+    cookie: Optional[str],
+    referer: Optional[str],
+):
     """Download a file using bonded multi-network connections."""
     adapters = get_bonded_pool()
     if not adapters:
         console.print("[bold red]Error: No active online network adapters detected.[/bold red]")
         raise click.Abort()
+
+    # Parse custom headers
+    parsed_headers = {}
+    for h in headers_list:
+        if ":" in h:
+            k, v = h.split(":", 1)
+            parsed_headers[k.strip()] = v.strip()
 
     dashboard = TerminalDashboard(console=console)
     chunk_bytes = chunk_size * 1024 * 1024
@@ -95,6 +113,9 @@ def download_file(url: str, output_path: Optional[str], chunk_size: int, workers
         adapters=adapters,
         chunk_size=chunk_bytes,
         workers_per_adapter=workers,
+        custom_headers=parsed_headers,
+        cookie=cookie,
+        referer=referer,
     )
 
     probe = engine._prepare()

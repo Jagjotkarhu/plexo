@@ -91,3 +91,31 @@ def test_bonded_engine_download(mock_server):
             actual_hash = hashlib.sha256(f.read()).hexdigest()
 
         assert actual_hash == expected_hash
+
+
+def test_bonded_engine_with_cookies_and_referer(mock_server):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "output_cookie.bin"
+
+        mock_adapter = NetworkAdapter(
+            name="Mock-Adapter",
+            ip_address="127.0.0.1",
+            netmask="255.255.255.0",
+            kind="ethernet",
+            is_up=True,
+            is_online=True,
+        )
+
+        engine = BondingDownloadEngine(
+            url=mock_server,
+            output_path=output_file,
+            adapters=[mock_adapter],
+            chunk_size=128 * 1024,
+            custom_headers={"X-Custom-Auth": "Token123"},
+            cookie="session=plexo_movie_test",
+            referer="https://itsfuckingfast.co/download",
+        )
+
+        final_path = engine.execute()
+        assert final_path.exists()
+        assert final_path.stat().st_size == len(RangeHTTPRequestHandler.DATA)

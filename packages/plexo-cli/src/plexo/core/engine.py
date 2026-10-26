@@ -47,12 +47,18 @@ class BondingDownloadEngine:
         adapters: Optional[List[NetworkAdapter]] = None,
         chunk_size: int = 8 * 1024 * 1024,  # 8 MB default chunk
         workers_per_adapter: int = 2,
+        custom_headers: Optional[dict[str, str]] = None,
+        cookie: Optional[str] = None,
+        referer: Optional[str] = None,
     ):
         self.url = url
         self.chunk_size = chunk_size
         self.workers_per_adapter = workers_per_adapter
         self.adapters = adapters or get_bonded_pool()
         self.output_path = output_path
+        self.custom_headers = custom_headers or {}
+        self.cookie = cookie
+        self.referer = referer
 
         self.probe: Optional[ProbeResult] = None
         self.watchdog = QoSWatchdog()
@@ -63,7 +69,16 @@ class BondingDownloadEngine:
 
     def _prepare(self) -> ProbeResult:
         """Probes the remote server and sets output path."""
-        self.probe = probe_url(self.url)
+        self.probe = probe_url(
+            self.url,
+            custom_headers=self.custom_headers,
+            cookie=self.cookie,
+            referer=self.referer,
+        )
+        if not self.cookie and self.probe.session_cookies:
+            self.cookie = self.probe.session_cookies
+        if not self.referer and self.probe.referer:
+            self.referer = self.probe.referer
 
         if not self.output_path:
             self.output_path = Path.cwd() / self.probe.filename
@@ -98,7 +113,12 @@ class BondingDownloadEngine:
         """Fallback for non-range servers."""
         adapter = self.adapters[0] if self.adapters else None
         local_ip = adapter.ip_address if adapter else "0.0.0.0"
-        client = BoundRangeClient(local_ip=local_ip)
+        client = BoundRangeClient(
+            local_ip=local_ip,
+            custom_headers=self.custom_headers,
+            cookie=self.cookie,
+            referer=self.referer,
+        )
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
         downloaded = 0
@@ -207,7 +227,12 @@ class BondingDownloadEngine:
         progress_callback: Optional[Callable[[ProgressUpdate], None]],
     ) -> None:
         """Worker thread dedicated to a specific network adapter."""
-        client = BoundRangeClient(local_ip=adapter.ip_address)
+        client = BoundRangeClient(
+            local_ip=adapter.ip_address,
+            custom_headers=self.custom_headers,
+            cookie=self.cookie,
+            referer=self.referer,
+        )
         metric = self.watchdog.get(adapter.ip_address)
 
         while not self._cancel_event.is_set():
