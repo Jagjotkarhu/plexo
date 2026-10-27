@@ -3,9 +3,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/plexo-cli.svg?color=blue)](https://pypi.org/project/plexo-cli/)
 [![Python versions](https://img.shields.io/pypi/pyversions/plexo-cli.svg)](https://pypi.org/project/plexo-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-36%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-55%20passed-success.svg)](tests/)
 
-> **Universal, lightweight, terminal-first multi-network bandwidth bonding and torrent engine.**  
+> **Universal, lightweight, terminal-first multi-network bandwidth bonding, video downloader, and torrent engine.**  
 > Combines Wi-Fi, Ethernet, and Mobile 5G tethering into one unified high-speed pipe directly from your command line.
 
 ---
@@ -13,6 +13,10 @@
 ## 🚀 Key Features
 
 * **🌐 Multi-Socket Bandwidth Bonding:** Binds parallel download workers to distinct physical network interfaces using source-IP socket routing (`urllib3.PoolManager(source_address=(NIC_IP, 0))`).
+* **📹 Universal Video Downloader (`plexo video`):** Extracts, downloads, and muxes video/audio streams across 1,800+ platforms (YouTube, Instagram Reels, TikTok, Twitter/X, Reddit, Vimeo) using multi-network bonding.
+* **🎯 Mathematical Quality Fallback:** Targets your exact desired resolution (e.g. `--quality 1080p`), gracefully falling back to the nearest highest available resolution (`height <= requested`) if 1080p is unavailable.
+* **🎵 Multi-Track & Audio Extraction:** Download isolated high-bitrate audio (`--audio-only`), specify audio language tracks (`--audio-lang`), and fetch multi-language subtitles (`--sub en,es`).
+* **⚡ Zero-Copy Stream Muxing:** Combines separate DASH/HLS high-resolution video and audio streams seamlessly via zero-copy FFmpeg (`-c copy`) in 0.1 seconds without CPU strain.
 * **🧲 BitTorrent Multi-Homing Swarm:** Slices BitTorrent peer swarms across multiple network adapters simultaneously with SHA-1 piece verification.
 * **🎬 Watch While Downloading (`--sequential`):** Prioritizes file headers (moov container) and opening frames so media players like **VLC** can stream video immediately from byte 0.
 * **🪞 Multi-Source Mirror Bonding (`-m / --mirror`):** Pulls chunks simultaneously across distinct server mirrors (e.g. Mirror A on Wi-Fi, Mirror B on 5G) to bypass server-side IP throttling.
@@ -99,7 +103,62 @@ plexo download "<protected-url>" \
 
 ---
 
-### 3. BitTorrent Swarm Multi-Homing: `plexo torrent`
+### 3. Universal Video Downloader: `plexo video`
+Download high-resolution videos, Reels, and audio tracks across 1,800+ platforms with multi-network socket bonding and automatic zero-copy muxing:
+
+#### Basic Video Download
+```bash
+# Target 1080p (falls back smoothly to 720p or highest available if 1080p is absent):
+plexo video "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Download Instagram Reels, TikTok, Twitter/X, or Reddit videos:
+plexo video "https://www.instagram.com/reel/C3b45x..."
+plexo video "https://x.com/user/status/123456789"
+```
+
+#### Resolution Fallback Hierarchy (`-q / --quality`)
+```bash
+# Target 4K resolution (2160p):
+plexo video "<url>" -q 4k
+
+# Target specific vertical resolution:
+plexo video "<url>" -q 720p
+
+# Always grab highest available resolution:
+plexo video "<url>" -q best
+```
+
+#### Audio Extraction & Language Selection (`--audio-only`, `--audio-lang`)
+```bash
+# Extract high-bitrate audio track only (m4a/opus/mp3):
+plexo video "https://www.youtube.com/watch?v=..." --audio-only
+
+# Specify preferred audio language track:
+plexo video "<url>" --audio-lang en
+```
+
+#### Subtitle Extraction (`--sub`)
+```bash
+# Download English and Spanish subtitles:
+plexo video "<url>" --sub en,es
+```
+
+#### Inspect Available Formats (`--list`)
+Inspect video codecs, resolutions, audio streams, and available subtitles without downloading any media bytes:
+```bash
+plexo video "<url>" --list
+```
+
+#### Smart Auto-Delegation in `plexo download`
+If you pass a streaming video link directly to `plexo download`, Plexo automatically recognizes the media host and hands off execution to the video downloader engine:
+```bash
+plexo download "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+# [INFO] Media stream URL detected. Delegating to plexo video...
+```
+
+---
+
+### 4. BitTorrent Swarm Multi-Homing: `plexo torrent`
 
 #### Magnet Links & `.torrent` Files
 ```bash
@@ -132,7 +191,7 @@ plexo torrent "magnet:?xt=urn:btih:..." --sequential -o "D:\Movies"
 
 ---
 
-### 4. Background Clipboard Watcher: `plexo watch`
+### 5. Background Clipboard Watcher: `plexo watch`
 Listens in the background for copied download links (`.mp4`, `.mkv`, `.zip`, `.iso`, `magnet:`, etc.):
 
 ```bash
@@ -148,7 +207,7 @@ plexo watch -a --sequential -o "D:\Movies"
 
 ---
 
-### 5. Local Acceleration Proxy: `plexo proxy`
+### 6. Local Acceleration Proxy: `plexo proxy`
 Accelerate development tools across bonded network connections:
 
 ```bash
@@ -168,29 +227,31 @@ curl -O https://example.com/dataset.tar.gz
 
 ---
 
-### 6. Probe Server Capabilities: `plexo info`
+### 7. Probe Server Capabilities: `plexo info`
 Inspect remote server headers, file size, MIME type, and byte-range support:
 ```bash
-plexo info "https://example.com/file.zip"
+plexo info
 ```
 
 ---
 
 ## 🧪 Verification & Testing
 
-The package includes a comprehensive automated test suite testing live sockets, mock mirrors, sparse file allocation, torrent bencoding, QoS quota enforcement, and clipboard regex extractors:
+The package includes a comprehensive automated test suite testing live sockets, mock mirrors, sparse file allocation, torrent bencoding, QoS quota enforcement, clipboard regex extractors, yt-dlp stream resolution, and zero-copy stream muxing:
 
 ```bash
 pytest packages/plexo-cli -v
 ```
 ```text
-tests/test_adapter.py     PASSED (3/3)
-tests/test_sparse.py      PASSED (3/3)
-tests/test_torrent.py     PASSED (4/4)
-tests/test_engine.py      PASSED (5/5)
-tests/test_watcher.py     PASSED (12/12)
-tests/test_mirror.py      PASSED (9/9)
-============================= 36 passed in 10.10s =============================
+tests/test_adapter.py            PASSED (3/3)
+tests/test_sparse.py             PASSED (3/3)
+tests/test_torrent.py            PASSED (4/4)
+tests/test_engine.py             PASSED (5/5)
+tests/test_mirror.py             PASSED (9/9)
+tests/test_watcher.py            PASSED (12/12)
+tests/test_video_resolver.py     PASSED (9/9)
+tests/test_video_downloader.py   PASSED (10/10)
+============================= 55 passed in 12.52s =============================
 ```
 
 ---

@@ -41,6 +41,13 @@ class TerminalDashboard:
         self.overall_task: Optional[TaskID] = None
         self.adapter_tasks: Dict[str, TaskID] = {}
 
+    def reset(self) -> None:
+        """Clears all active tasks to allow smooth stage transitions."""
+        for task_id in list(self.progress.task_ids):
+            self.progress.remove_task(task_id)
+        self.overall_task = None
+        self.adapter_tasks.clear()
+
     def setup(
         self,
         filename: str,
@@ -49,6 +56,9 @@ class TerminalDashboard:
         mirrors: Optional[List[str]] = None,
     ) -> None:
         """Initializes the multi-bar display."""
+        if self.overall_task is not None:
+            self.reset()
+
         mirror_info = f"\nActive Mirrors: [bold green]{len(mirrors)}[/bold green]" if mirrors and len(mirrors) > 1 else ""
         self.console.print(
             Panel.fit(

@@ -98,6 +98,40 @@ def download_file(
     quota_list: tuple[str, ...],
 ):
     """Download a file using bonded multi-network connections and mirrors."""
+    # Check if URL is a known streaming media platform
+    video_domains = (
+        "youtube.com", "youtu.be",
+        "instagram.com", "tiktok.com",
+        "twitter.com", "x.com",
+        "reddit.com", "vimeo.com",
+        "facebook.com", "fb.watch",
+        "twitch.tv", "dailymotion.com",
+    )
+    static_exts = (".zip", ".tar", ".gz", ".7z", ".iso", ".bin", ".exe", ".png", ".jpg", ".jpeg", ".pdf")
+    is_static = any(url.lower().split("?")[0].endswith(ext) for ext in static_exts)
+    if not is_static and any(domain in url.lower() for domain in video_domains):
+        console.print(
+            f"[bold cyan][INFO][/bold cyan] Media stream URL detected. Delegating to [bold green]plexo video[/bold green]..."
+        )
+        ctx = click.get_current_context()
+        ctx.invoke(
+            video_download,
+            url=url,
+            output_path=output_path,
+            quality="1080p",
+            audio_only=False,
+            audio_lang=None,
+            sub_langs=(),
+            list_formats=False,
+            cookie=cookie,
+            referer=referer,
+            sequential=sequential,
+            quota_list=quota_list,
+            chunk_size=chunk_size,
+            workers=workers,
+        )
+        return
+
     from .core.qos import parse_size_str
     adapters = get_bonded_pool()
     if not adapters:
@@ -160,6 +194,160 @@ def download_file(
             checksum = writer.calculate_checksum()
 
     dashboard.finish(final_path.name, total_bytes, elapsed, checksum, mirrors=engine.mirrors)
+
+
+@main.command(name="video")
+@click.argument("url")
+@click.option("-o", "--output", "output_path", type=click.Path(), default=None, help="Output destination path or directory.")
+@click.option("-q", "--quality", default="1080p", help="Target resolution (e.g. 1080p, 720, 4k, best, worst).")
+@click.option("--audio-only", is_flag=True, help="Download only the extracted audio track.")
+@click.option("--audio-lang", default=None, help="Preferred audio language code (e.g. en, es, hi).")
+@click.option("--sub", "sub_langs", multiple=True, help="Subtitle languages to extract (e.g. --sub en --sub es).")
+@click.option("--list", "list_formats", is_flag=True, help="List available formats, audio tracks, and subtitles without downloading.")
+@click.option("--cookie", default=None, help="Path to Netscape cookiefile or raw cookie string.")
+@click.option("--referer", default=None, help="Custom Referer URL for sites requiring origin verification.")
+@click.option("--sequential", is_flag=True, help="Download chunks in strict sequential order.")
+@click.option("-k", "--quota", "quota_list", multiple=True, help="Data cap for adapter (e.g. -k usb=1.5GB).")
+@click.option("--chunk-size", default=8, type=int, help="Chunk size in MB (default: 8 MB).")
+@click.option("--workers", default=2, type=int, help="Workers per network adapter (default: 2).")
+def video_download(
+    url: str,
+    output_path: Optional[str],
+    quality: str,
+    audio_only: bool,
+    audio_lang: Optional[str],
+    sub_langs: tuple[str, ...],
+    list_formats: bool,
+    cookie: Optional[str],
+    referer: Optional[str],
+    sequential: bool,
+    quota_list: tuple[str, ...],
+    chunk_size: int,
+    workers: int,
+):
+    """Download universal videos (YouTube, Instagram, TikTok, Twitter/X) across bonded network links."""
+    from .core.qos import parse_size_str
+    from .video.downloader import BondedVideoDownloader
+    from .video.resolver import resolve_video
+
+    parsed_subs = [s.strip() for item in sub_langs for s in item.split(",") if s.strip()]
+
+    with console.status("[cyan]Resolving media streams via universal extractor...[/cyan]"):
+        try:
+            metadata = resolve_video(
+                url=url,
+                quality=quality,
+                audio_only=audio_only,
+                audio_lang=audio_lang,
+                sub_langs=parsed_subs if parsed_subs else None,
+                custom_cookies=cookie,
+            )
+        except Exception as e:
+            console.print(f"[bold red]Resolution Error:[/bold red] {e}")
+            raise click.Abort()
+
+    if list_formats:
+        # Display video formats table
+        if metadata.all_videos:
+            v_table = Table(title=f"[bold green]Available Video Streams: {metadata.title}[/bold green]")
+            v_table.add_column("Format ID", style="bold yellow")
+            v_table.add_column("Resolution", style="cyan")
+            v_table.add_column("FPS", style="magenta")
+            v_table.add_column("Codec", style="blue")
+            v_table.add_column("Audio?", style="green")
+            v_table.add_column("Approx Size", style="dim")
+            for v in metadata.all_videos:
+                size_str = f"{v.filesize / (1024*1024):.1f} MB" if v.filesize else "Unknown"
+                audio_str = "[bold green]YES[/bold green]" if v.has_audio else "[dim]Video Only[/dim]"
+                v_table.add_row(v.format_id, v.resolution, str(v.fps), v.vcodec, audio_str, size_str)
+            console.print(v_table)
+
+        # Display audio tracks table
+        if metadata.all_audios:
+            a_table = Table(title="[bold green]Available Audio Streams[/bold green]")
+            a_table.add_column("Format ID", style="bold yellow")
+            a_table.add_column("Language", style="cyan")
+            a_table.add_column("Bitrate", style="magenta")
+            a_table.add_column("Codec", style="blue")
+            a_table.add_column("Approx Size", style="dim")
+            for a in metadata.all_audios:
+                size_str = f"{a.filesize / (1024*1024):.1f} MB" if a.filesize else "Unknown"
+                a_table.add_row(a.format_id, a.language or "default", f"{a.abr:.0f} kbps", a.acodec, size_str)
+            console.print(a_table)
+
+        # Display subtitles table
+        if metadata.all_subtitles:
+            s_table = Table(title="[bold green]Available Subtitles[/bold green]")
+            s_table.add_column("Language", style="cyan")
+            s_table.add_column("Name", style="yellow")
+            s_table.add_column("Auto-Generated", style="dim")
+            for s in metadata.all_subtitles:
+                auto_str = "Yes" if s.is_auto_generated else "No"
+                s_table.add_row(s.language, s.name, auto_str)
+            console.print(s_table)
+        return
+
+    adapters = get_bonded_pool()
+    if not adapters:
+        console.print("[bold red]Error: No active online network adapters detected.[/bold red]")
+        raise click.Abort()
+
+    parsed_quotas = {}
+    for q in quota_list:
+        if "=" in q:
+            ident, s_val = q.split("=", 1)
+            parsed_quotas[ident.strip()] = parse_size_str(s_val.strip())
+
+    vid_info = f"{metadata.selected_video.resolution} ({metadata.selected_video.ext})" if metadata.selected_video else "None"
+    aud_info = f"{metadata.selected_audio.abr:.0f}kbps ({metadata.selected_audio.language})" if metadata.selected_audio else "None"
+    mux_notice = " [dim](Zero-Copy Mux)[/dim]" if (metadata.selected_video and metadata.selected_audio and not metadata.selected_video.has_audio) else ""
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]Plexo Universal Video Engine[/bold cyan]\n"
+            f"Title: [bold yellow]{metadata.title}[/bold yellow]\n"
+            f"Uploader: [magenta]{metadata.uploader or 'Unknown'}[/magenta] | Duration: [cyan]{metadata.duration}s[/cyan]\n"
+            f"Video Stream: [green]{vid_info}[/green]{mux_notice}\n"
+            f"Audio Stream: [green]{aud_info}[/green]\n"
+            f"Active Network Links: [bold green]{len(adapters)}[/bold green]",
+            border_style="cyan",
+        )
+    )
+
+    dashboard = TerminalDashboard(console=console)
+    chunk_bytes = chunk_size * 1024 * 1024
+
+    downloader = BondedVideoDownloader(
+        metadata=metadata,
+        output_path=output_path,
+        adapters=adapters,
+        chunk_size=chunk_bytes,
+        workers_per_adapter=workers,
+        sequential=sequential,
+        quotas=parsed_quotas,
+        cookie=cookie,
+        referer=referer,
+    )
+
+    def on_stage(stage_title: str, total_bytes: int):
+        dashboard.setup(stage_title, total_bytes, adapters)
+
+    start_time = time.time()
+    with dashboard.progress:
+        final_file = downloader.download(
+            progress_callback=dashboard.update,
+            stage_callback=on_stage,
+        )
+
+    elapsed = time.time() - start_time
+    total_bytes = final_file.stat().st_size
+
+    from .core.sparse import SparseFileWriter
+    with console.status("[cyan]Verifying file checksum (SHA-256)...[/cyan]"):
+        with SparseFileWriter(final_file, total_bytes) as writer:
+            checksum = writer.calculate_checksum()
+
+    dashboard.finish(final_file.name, total_bytes, elapsed, checksum)
 
 
 @main.command(name="proxy")
