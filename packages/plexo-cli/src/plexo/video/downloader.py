@@ -45,7 +45,7 @@ def download_subtitle_track(
 
     http = urllib3.PoolManager()
     headers = {
-        "User-Agent": "Plexo-CLI/0.1.3 (Bandwidth-Bonding-Engine)",
+        "User-Agent": "Plexo-CLI/0.1.4 (Bandwidth-Bonding-Engine)",
     }
     if cookie:
         headers["Cookie"] = cookie

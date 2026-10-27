@@ -53,7 +53,7 @@ def probe_url(
     """Probes the remote server to determine file size, range support, filename, and session cookies."""
     http = urllib3.PoolManager()
     headers = {
-        "User-Agent": "Plexo-CLI/0.1.3 (Bandwidth-Bonding-Engine)",
+        "User-Agent": "Plexo-CLI/0.1.4 (Bandwidth-Bonding-Engine)",
         "Accept-Encoding": "identity",
     }
     if custom_headers:
@@ -222,7 +222,7 @@ class BoundRangeClient:
     ) -> Generator[bytes, None, None]:
         """Fetches [start_byte, end_byte] inclusive through the bound adapter."""
         headers = {
-            "User-Agent": "Plexo-CLI/0.1.3 (Bandwidth-Bonding-Engine)",
+            "User-Agent": "Plexo-CLI/0.1.4 (Bandwidth-Bonding-Engine)",
             "Range": f"bytes={start_byte}-{end_byte}",
             "Accept-Encoding": "identity",
         }
