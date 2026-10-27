@@ -43,6 +43,8 @@ jobs:
     name: Publish to PyPI
     needs: test-and-build
     runs-on: ubuntu-latest
+    env:
+      PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
     steps:
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
@@ -52,8 +54,6 @@ jobs:
 
       - name: Publish to PyPI
         if: env.PYPI_TOKEN != ''
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
