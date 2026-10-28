@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from ..core.adapter import NetworkAdapter, get_bonded_pool
+from ..core.client import DEFAULT_USER_AGENT, parse_cookie_input
 from ..core.engine import BondingDownloadEngine, ProgressUpdate
 from .muxer import is_ffmpeg_available, mux_media_streams
 from .resolver import VideoMetadata, SubtitleTrack
@@ -45,10 +46,10 @@ def download_subtitle_track(
 
     http = urllib3.PoolManager()
     headers = {
-        "User-Agent": "Plexo-CLI/0.1.4 (Bandwidth-Bonding-Engine)",
+        "User-Agent": DEFAULT_USER_AGENT,
     }
     if cookie:
-        headers["Cookie"] = cookie
+        headers["Cookie"] = parse_cookie_input(cookie)
     if referer:
         headers["Referer"] = referer
 
@@ -143,7 +144,7 @@ class BondedVideoDownloader:
         # Case 1: Audio Only
         if not video_track:
             if not audio_track:
-                raise ValueError("No audio track available to download.")
+                raise ValueError("No playable video or audio streams found for this URL.")
             if stage_callback:
                 stage_callback(f"{stem} [Audio]", audio_track.filesize)
             engine = BondingDownloadEngine(

@@ -6,6 +6,7 @@ yt-dlp in metadata-only mode without downloading bytes.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -109,25 +110,23 @@ def select_best_video_track(
     Algorithm:
     1. Filter tracks where height <= target_height.
     2. If candidates exist, select track maximizing: (height, fps, tbr).
-    3. If no tracks meet height <= target_height (e.g. video is only 720p or 480p),
-       gracefully select the highest available resolution without crashing.
+    3. If no tracks meet height <= target_height, gracefully select the highest available.
     """
     if not tracks:
         return None
 
-    valid_tracks = [t for t in tracks if t.url and t.height > 0]
+    valid_tracks = [t for t in tracks if t.url]
     if not valid_tracks:
-        return tracks[0] if tracks else None
+        return None
 
     # Step 1: Candidates within target ceiling
-    ceiling_candidates = [t for t in valid_tracks if t.height <= target_height]
-
+    ceiling_candidates = [t for t in valid_tracks if t.height <= target_height and t.height > 0]
     pool = ceiling_candidates if ceiling_candidates else valid_tracks
 
     # Score function: (height, fps, total_bitrate, prefer_isolated_video)
     def score(t: VideoTrack) -> Tuple[int, int, float, int]:
         combined_pref = 1 if (prefer_combined == t.has_audio) else 0
-        return (t.height, t.fps or 0, t.tbr or 0.0, combined_pref)
+        return (t.height or 0, t.fps or 0, t.tbr or 0.0, combined_pref)
 
     return max(pool, key=score)
 
@@ -200,8 +199,24 @@ def parse_manifest_dict(
     thumbnail = info.get("thumbnail") or ""
 
     formats = info.get("formats") or []
+    # Direct fallback: if no formats list but top-level url exists
+    if not formats and info.get("url"):
+        formats = [{
+            "url": info.get("url"),
+            "format_id": "direct",
+            "ext": info.get("ext") or "mp4",
+            "vcodec": info.get("vcodec") or "h264",
+            "acodec": info.get("acodec") or "aac",
+            "height": info.get("height") or 720,
+            "width": info.get("width") or 1280,
+            "filesize": info.get("filesize") or 0,
+        }]
+
     all_videos: List[VideoTrack] = []
     all_audios: List[AudioTrack] = []
+
+    audio_exts = ("m4a", "opus", "mp3", "aac", "ogg", "flac", "wav")
+    video_exts = ("mp4", "webm", "mkv", "avi", "mov", "flv", "m4v", "ts")
 
     for f in formats:
         url = f.get("url")
@@ -209,9 +224,9 @@ def parse_manifest_dict(
             continue
 
         fid = str(f.get("format_id") or "")
-        ext = str(f.get("ext") or "mp4")
-        vcodec = str(f.get("vcodec") or "none")
-        acodec = str(f.get("acodec") or "none")
+        ext = str(f.get("ext") or "mp4").lower()
+        vcodec = str(f.get("vcodec") or "none").lower()
+        acodec = str(f.get("acodec") or "none").lower()
         height = int(f.get("height") or 0)
         width = int(f.get("width") or 0)
         fps = int(f.get("fps") or 0)
@@ -220,20 +235,31 @@ def parse_manifest_dict(
         abr = float(f.get("abr") or 0.0)
         lang = str(f.get("language") or "")
 
-        has_video = vcodec != "none" and height > 0
-        has_audio = acodec != "none"
+        # Infer resolution from resolution string or format_note if height is 0
+        if height == 0:
+            res_str = str(f.get("format_note") or f.get("resolution") or "")
+            match = re.search(r"(\d{3,4})[pP]?", res_str)
+            if match:
+                height = int(match.group(1))
+
+        is_pure_audio = ext in audio_exts or (vcodec in ("none", "") and acodec not in ("none", ""))
+        
+        # Track has video if not strictly audio-only
+        has_video = not is_pure_audio and (vcodec not in ("none", "") or height > 0 or ext in video_exts or acodec in ("none", ""))
+        # Combined track has audio if acodec is present or if it's a standard video container
+        has_audio = acodec not in ("none", "") or (not is_pure_audio and ext in video_exts)
 
         if has_video:
-            res_label = f"{height}p" if height else "unknown"
+            res_label = f"{height}p" if height else "standard"
             all_videos.append(
                 VideoTrack(
                     format_id=fid,
                     ext=ext,
                     resolution=res_label,
-                    height=height,
-                    width=width,
+                    height=height if height else 720,
+                    width=width if width else 1280,
                     fps=fps,
-                    vcodec=vcodec,
+                    vcodec=vcodec if vcodec != "none" else "h264",
                     url=url,
                     filesize=filesize,
                     tbr=tbr,
@@ -241,18 +267,37 @@ def parse_manifest_dict(
                 )
             )
 
-        if has_audio:
+        if has_audio and (is_pure_audio or vcodec in ("none", "")):
             all_audios.append(
                 AudioTrack(
                     format_id=fid,
                     ext=ext,
                     language=lang,
                     abr=abr or tbr,
-                    acodec=acodec,
+                    acodec=acodec if acodec != "none" else "aac",
                     url=url,
                     filesize=filesize,
                 )
             )
+
+    # Fallback safety: if no tracks were classified but formats exist with URLs
+    if not all_videos and not all_audios and formats:
+        for f in formats:
+            if f.get("url"):
+                all_videos.append(
+                    VideoTrack(
+                        format_id=str(f.get("format_id") or "fallback"),
+                        ext=str(f.get("ext") or "mp4"),
+                        resolution="standard",
+                        height=720,
+                        width=1280,
+                        fps=30,
+                        vcodec="h264",
+                        url=f.get("url"),
+                        filesize=int(f.get("filesize") or 0),
+                        has_audio=True,
+                    )
+                )
 
     # Subtitles extraction
     all_subtitles: List[SubtitleTrack] = []
@@ -325,10 +370,11 @@ def resolve_video(
     audio_lang: Optional[str] = None,
     sub_langs: Optional[List[str]] = None,
     custom_cookies: Optional[str] = None,
+    browser_cookies: Optional[str] = None,
 ) -> VideoMetadata:
     """Resolves any platform video link (YouTube, Instagram, TikTok, Twitter) into direct stream URLs.
     
-    Extracts metadata without downloading media bytes.
+    Extracts metadata without downloading media bytes, with automated Cloudflare TLS impersonation.
     """
     import yt_dlp
 
@@ -337,22 +383,57 @@ def resolve_video(
         "no_warnings": True,
         "skip_download": True,
         "extract_flat": False,
+        "extractor_args": {"generic": {"impersonate": [""]}},
     }
 
-    if custom_cookies:
-        ydl_opts["cookiefile"] = custom_cookies
+    try:
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+        ydl_opts["impersonate"] = ImpersonateTarget.from_str("chrome")
+    except Exception:
+        pass
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if info is None:
-            raise ValueError(f"Failed to extract video metadata from: {url}")
+    temp_cookie_path = None
+    if browser_cookies:
+        ydl_opts["cookiesfrombrowser"] = (browser_cookies.lower().strip(), None, None, None)
+    elif custom_cookies:
+        if os.path.isfile(custom_cookies):
+            ydl_opts["cookiefile"] = custom_cookies
+        else:
+            ydl_opts.setdefault("http_headers", {})["Cookie"] = custom_cookies
+            try:
+                import tempfile
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc.split(":")[0]
+                temp_file = tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt")
+                temp_file.write("# Netscape HTTP Cookie File\n")
+                for item in custom_cookies.split(";"):
+                    if "=" in item:
+                        k, v = item.strip().split("=", 1)
+                        temp_file.write(f".{domain}\tTRUE\t/\tFALSE\t2147483647\t{k}\t{v}\n")
+                temp_file.close()
+                temp_cookie_path = temp_file.name
+                ydl_opts["cookiefile"] = temp_cookie_path
+            except Exception:
+                pass
 
-        # If it's a playlist or multi-entry, pick the first entry
-        if "entries" in info:
-            entries = list(info["entries"])
-            if not entries:
-                raise ValueError("Playlist contains no playable entries.")
-            info = entries[0]
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info is None:
+                raise ValueError(f"Failed to extract video metadata from: {url}")
+
+            # If it's a playlist or multi-entry, pick the first entry
+            if "entries" in info:
+                entries = list(info["entries"])
+                if not entries:
+                    raise ValueError("Playlist contains no playable entries.")
+                info = entries[0]
+    finally:
+        if temp_cookie_path and os.path.exists(temp_cookie_path):
+            try:
+                os.remove(temp_cookie_path)
+            except OSError:
+                pass
 
     return parse_manifest_dict(
         info,

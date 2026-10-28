@@ -124,6 +124,7 @@ def download_file(
             sub_langs=(),
             list_formats=False,
             cookie=cookie,
+            browser_cookies=None,
             referer=referer,
             sequential=sequential,
             quota_list=quota_list,
@@ -205,6 +206,7 @@ def download_file(
 @click.option("--sub", "sub_langs", multiple=True, help="Subtitle languages to extract (e.g. --sub en --sub es).")
 @click.option("--list", "list_formats", is_flag=True, help="List available formats, audio tracks, and subtitles without downloading.")
 @click.option("--cookie", default=None, help="Path to Netscape cookiefile or raw cookie string.")
+@click.option("--cookies-from-browser", "--browser-cookies", "browser_cookies", default=None, help="Extract cookies from browser (chrome, edge, firefox, brave) to bypass Cloudflare bot challenges.")
 @click.option("--referer", default=None, help="Custom Referer URL for sites requiring origin verification.")
 @click.option("--sequential", is_flag=True, help="Download chunks in strict sequential order.")
 @click.option("-k", "--quota", "quota_list", multiple=True, help="Data cap for adapter (e.g. -k usb=1.5GB).")
@@ -219,6 +221,7 @@ def video_download(
     sub_langs: tuple[str, ...],
     list_formats: bool,
     cookie: Optional[str],
+    browser_cookies: Optional[str],
     referer: Optional[str],
     sequential: bool,
     quota_list: tuple[str, ...],
@@ -241,6 +244,7 @@ def video_download(
                 audio_lang=audio_lang,
                 sub_langs=parsed_subs if parsed_subs else None,
                 custom_cookies=cookie,
+                browser_cookies=browser_cookies,
             )
         except Exception as e:
             console.print(f"[bold red]Resolution Error:[/bold red] {e}")

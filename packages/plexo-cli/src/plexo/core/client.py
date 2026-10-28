@@ -43,6 +43,30 @@ def extract_filename(url: str, content_disposition: Optional[str] = None) -> str
     return "downloaded_file.bin"
 
 
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+
+def parse_cookie_input(cookie: Optional[str]) -> Optional[str]:
+    """If cookie is a file path (e.g. cookies.txt), parses and returns 'k1=v1; k2=v2' string."""
+    if not cookie:
+        return None
+    if os.path.isfile(cookie):
+        parsed = []
+        try:
+            with open(cookie, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) >= 7:
+                        parsed.append(f"{parts[5]}={parts[6]}")
+            return "; ".join(parsed) if parsed else cookie
+        except Exception:
+            return cookie
+    return cookie
+
+
 def probe_url(
     url: str,
     timeout: float = 10.0,
@@ -51,9 +75,10 @@ def probe_url(
     referer: Optional[str] = None,
 ) -> ProbeResult:
     """Probes the remote server to determine file size, range support, filename, and session cookies."""
+    cookie = parse_cookie_input(cookie)
     http = urllib3.PoolManager()
     headers = {
-        "User-Agent": "Plexo-CLI/0.1.4 (Bandwidth-Bonding-Engine)",
+        "User-Agent": DEFAULT_USER_AGENT,
         "Accept-Encoding": "identity",
     }
     if custom_headers:
@@ -203,7 +228,7 @@ class BoundRangeClient:
         self.local_ip = local_ip
         self.timeout = timeout
         self.custom_headers = custom_headers or {}
-        self.cookie = cookie
+        self.cookie = parse_cookie_input(cookie)
         self.referer = referer
 
         self._pool = urllib3.PoolManager(
@@ -222,7 +247,7 @@ class BoundRangeClient:
     ) -> Generator[bytes, None, None]:
         """Fetches [start_byte, end_byte] inclusive through the bound adapter."""
         headers = {
-            "User-Agent": "Plexo-CLI/0.1.4 (Bandwidth-Bonding-Engine)",
+            "User-Agent": DEFAULT_USER_AGENT,
             "Range": f"bytes={start_byte}-{end_byte}",
             "Accept-Encoding": "identity",
         }

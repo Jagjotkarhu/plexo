@@ -220,3 +220,35 @@ def test_parse_manifest_audio_only():
     assert meta.selected_video is None
     assert meta.selected_audio is not None
     assert meta.selected_audio.format_id == "audio_best"
+
+
+def test_resolve_video_cookies_options(tmp_path):
+    from unittest.mock import MagicMock, patch
+    from plexo.video.resolver import resolve_video
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t2147483647\tcf_clearance\tabc123\n")
+
+    mock_info = {
+        "title": "Protected Clip",
+        "id": "p123",
+        "formats": [
+            {"format_id": "v1080", "height": 1080, "vcodec": "avc1", "acodec": "none", "url": "http://stream/v.mp4"},
+            {"format_id": "a1", "vcodec": "none", "acodec": "aac", "abr": 128.0, "url": "http://stream/a.m4a"},
+        ],
+    }
+
+    with patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+        mock_instance = MagicMock()
+        mock_instance.__enter__.return_value = mock_instance
+        mock_instance.extract_info.return_value = mock_info
+        mock_ydl_cls.return_value = mock_instance
+
+        # Test with cookie file path
+        res1 = resolve_video("https://example.com/video", custom_cookies=str(cookie_file))
+        assert res1.title == "Protected Clip"
+
+        # Test with raw cookie string
+        res2 = resolve_video("https://example.com/video", custom_cookies="cf_clearance=abc123; other=val")
+        assert res2.title == "Protected Clip"
+
