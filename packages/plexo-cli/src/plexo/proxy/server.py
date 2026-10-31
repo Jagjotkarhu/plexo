@@ -155,12 +155,13 @@ class LocalBondedProxy:
                     port = 443
 
                 if port not in ALLOWED_CONNECT_PORTS:
-                    client_writer.write(
-                        b"HTTP/1.1 403 Forbidden\r\n"
-                        b"Content-Type: text/plain\r\n"
-                        b"Connection: close\r\n\r\n"
-                        f"CONNECT to port {port} is restricted by Plexo.\r\n".encode()
-                    )
+                    msg = (
+                        "HTTP/1.1 403 Forbidden\r\n"
+                        "Content-Type: text/plain\r\n"
+                        "Connection: close\r\n\r\n"
+                        f"CONNECT to port {port} is restricted by Plexo.\r\n"
+                    ).encode("utf-8")
+                    client_writer.write(msg)
                     await client_writer.drain()
                     client_writer.close()
                     return
