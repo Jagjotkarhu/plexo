@@ -8,8 +8,48 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def check_video_dependencies() -> None:
+    """Ensure optional [video] dependencies are installed before executing."""
+    missing = []
+    try:
+        import yt_dlp
+    except ImportError:
+        missing.append("yt-dlp")
+
+    try:
+        import curl_cffi
+    except ImportError:
+        missing.append("curl_cffi")
+
+    if missing:
+        sys.stderr.write(
+            "\nError: Missing optional video dependencies!\n"
+            f"The following packages are required for 'plexo video': {', '.join(missing)}\n\n"
+            "To install them, run:\n"
+            "    pip install 'plexo-cli[video]'\n\n"
+        )
+        sys.exit(1)
+
+
+def get_ffmpeg_binary() -> Optional[str]:
+    """
+    Prefer system ffmpeg on PATH.
+    Fallback to imageio-ffmpeg only if system ffmpeg is absent.
+    """
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
 
 
 @dataclass

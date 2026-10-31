@@ -229,6 +229,12 @@ def video_download(
     workers: int,
 ):
     """Download universal videos (YouTube, Instagram, TikTok, Twitter/X) across bonded network links."""
+    from .core.config import show_first_time_notice_if_needed
+    show_first_time_notice_if_needed()
+
+    from .video.resolver import check_video_dependencies
+    check_video_dependencies()
+
     from .core.qos import parse_size_str
     from .video.downloader import BondedVideoDownloader
     from .video.resolver import resolve_video
@@ -357,9 +363,20 @@ def video_download(
 @main.command(name="proxy")
 @click.option("--host", default="127.0.0.1", help="Proxy listening host (default: 127.0.0.1).")
 @click.option("--port", default=8899, type=int, help="Proxy listening port (default: 8899).")
-def start_proxy(host: str, port: int):
+@click.option("--auth", default=None, help="Proxy authentication in 'username:password' format.")
+@click.option("--allow-remote", is_flag=True, default=False, help="Allow non-loopback binding without authentication.")
+def start_proxy(host: str, port: int, auth: Optional[str], allow_remote: bool):
     """Launch local acceleration proxy for pip, git, and curl."""
-    run_proxy(host=host, port=port)
+    from .proxy.server import is_loopback_host
+    if not is_loopback_host(host) and not auth and not allow_remote:
+        raise click.UsageError(
+            f"Refusing to bind to non-loopback host '{host}' without authentication.\n"
+            "Security Risk: This would expose an unauthenticated open proxy to the network.\n"
+            "Pass --auth <user:pass> or explicitly pass --allow-remote to proceed."
+        )
+    if auth and ":" not in auth:
+        raise click.UsageError("Argument --auth must be formatted as 'username:password'.")
+    run_proxy(host=host, port=port, auth=auth, allow_remote=allow_remote)
 
 
 @main.command(name="torrent")
@@ -369,6 +386,7 @@ def start_proxy(host: str, port: int):
 @click.option("--list", "list_files", is_flag=True, help="List all files in the torrent and exit.")
 @click.option("--select", "select_files", default=None, help="Download only specific file numbers (e.g. --select 1,2).")
 @click.option("-q", "--quota", "quota_list", multiple=True, help="Data cap for adapter (e.g. -q usb=1.5GB).")
+@click.option("--experimental", is_flag=True, default=False, help="Acknowledge experimental BitTorrent engine.")
 def download_torrent(
     source: str,
     output_dir: str,
@@ -376,8 +394,15 @@ def download_torrent(
     list_files: bool,
     select_files: Optional[str],
     quota_list: tuple[str, ...],
+    experimental: bool,
 ):
     """Download a torrent or magnet link across bonded network adapters."""
+    if not experimental and not list_files:
+        console.print(
+            "\n[bold yellow]⚠️ NOTICE:[/bold yellow] The BitTorrent engine is currently experimental.\n"
+            "Run with [bold green]--experimental[/bold green] to proceed (e.g. plexo torrent <source> --experimental).\n"
+        )
+        return
     from .core.qos import parse_size_str
     from .torrent.metadata import parse_magnet, parse_torrent_file
     from .torrent.client import TorrentBondingEngine
@@ -484,6 +509,16 @@ def show_info():
             title="System Capabilities",
         )
     )
+
+
+@main.command(name="doctor")
+@click.option("--duration", default=2.0, type=float, help="Sampling duration in seconds (default: 2.0s).")
+def doctor_check(duration: float):
+    """Diagnose multi-network interface routing and socket binding health."""
+    from .core.doctor import run_doctor_diagnostic
+    adapters = discover_adapters(verify_online=False)
+    iface_names = [a.name for a in adapters if a.is_up]
+    run_doctor_diagnostic(active_interfaces=iface_names, duration_secs=duration)
 
 
 if __name__ == "__main__":

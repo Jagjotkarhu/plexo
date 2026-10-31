@@ -9,11 +9,41 @@ from __future__ import annotations
 import ipaddress
 import platform
 import socket
+import struct
 import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
 import psutil
 import urllib3
+
+SO_BINDTODEVICE = 25
+IP_BOUND_IF = 25
+IPV6_BOUND_IF = 125
+
+
+def bind_socket_to_interface(sock: socket.socket, iface_name: str, iface_ip: Optional[str] = None) -> None:
+    """
+    Bind a socket to a specific network interface across Linux, macOS, and Windows.
+    Prevents Linux Weak Host kernel routing from funnelling packets into default gateway.
+    """
+    current_os = platform.system().lower()
+    if current_os == "linux":
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface_name.encode("utf-8") + b"\0")
+        except (PermissionError, OSError):
+            if iface_ip:
+                sock.bind((iface_ip, 0))
+    elif current_os == "darwin":
+        try:
+            if_index = socket.if_nametoindex(iface_name)
+            opt = IP_BOUND_IF if sock.family == socket.AF_INET else IPV6_BOUND_IF
+            sock.setsockopt(socket.IPPROTO_IP if sock.family == socket.AF_INET else socket.IPPROTO_IPV6, opt, struct.pack("I", if_index))
+        except Exception:
+            if iface_ip:
+                sock.bind((iface_ip, 0))
+    else:
+        if iface_ip:
+            sock.bind((iface_ip, 0))
 
 
 @dataclass
@@ -61,7 +91,7 @@ def is_usable_ip(ip_str: str) -> bool:
         return False
 
 
-def test_adapter_connectivity(ip_address: str, timeout: float = 2.0) -> bool:
+def test_adapter_connectivity(ip_address: str, iface_name: Optional[str] = None, timeout: float = 2.0) -> bool:
     """Verifies that an outgoing connection bound to this source IP can reach the internet."""
     test_hosts = [("1.1.1.1", 53), ("8.8.8.8", 53)]
     for host, port in test_hosts:
@@ -69,8 +99,10 @@ def test_adapter_connectivity(ip_address: str, timeout: float = 2.0) -> bool:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
-            # Bind specifically to this adapter's source IP
-            sock.bind((ip_address, 0))
+            if iface_name:
+                bind_socket_to_interface(sock, iface_name, ip_address)
+            else:
+                sock.bind((ip_address, 0))
             sock.connect((host, port))
             return True
         except (socket.error, OSError):
@@ -114,7 +146,7 @@ def discover_adapters(verify_online: bool = True) -> List[NetworkAdapter]:
 
                 online = False
                 if verify_online:
-                    online = test_adapter_connectivity(ip)
+                    online = test_adapter_connectivity(ip, iface_name=iface_name)
 
                 adapter = NetworkAdapter(
                     name=iface_name,
